@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlmodel
+sqlalchemy
+pydantic
+pydantic-settings
+python-multipart
+PyJWT
+numpy
+dask[dataframe]
+scikit-learn
+google-generativeai
+datasets
