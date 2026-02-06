@@ -305,7 +305,14 @@ python -m app.utils.seed_data --orgs 3 --split train --limit 2000
 
 ## 6. Future Improvements
 
-
+| Area               | Improvement                                               | Why It Matters                      |
+|--------------------|-----------------------------------------------------------|-------------------------------------|
+| Ingestion          | Replace HTTP with Kafka/Redis Streams.                    | Eliminates API back-pressure.       |
+| Password Security  | Replace SHA-256+pepper with bcrypt or Argon2.             | Enhances security for production.   |
+| RBAC               | Implement fine-grained permissions (analyst, viewer).     | Required for enterprise governance. |
+| Alerting           | Add Email/Slack notifications for high anomaly scores.    | Proactive incident response.        |
+| Deployment         | Implement Docker Compose, CI/CD, and health checks.       | Production readiness.               |
+| Prediction         | Add GET /ai/usage-prediction endpoint.                    | Forecast upcoming usage trends.     |
 
 ---
 
