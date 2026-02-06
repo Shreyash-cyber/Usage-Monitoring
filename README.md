@@ -406,30 +406,30 @@ uvicorn app.main:app --reload                     # http://localhost:8000
 cd frontend
 npm install
 npm run dev                                       # http://localhost:5173
-
+```
 
 ## UI Reference (Screenshots)
 Quick visual reference of the current UI flows (images live under `ref_image/`).
 
 - Login view
 
-   ![Login](ref_image/Screenshot%202026-02-06%20153051.png)
+   ![Login](ref_image/login.png)
 
 - Dashboard cards and charts
 
-   ![Dashboard metrics](ref_image/Screenshot%202026-02-06%20142144.png)
-   ![Dashboard usage chart](ref_image/Screenshot%202026-02-06%20142203.png)
+   ![Dashboard metrics](ref_image/dashboard-metrics.png)
+   ![Dashboard usage chart](ref_image/dashboard-usage-chart.png)
 
 - Feature and anomaly insights
 
-   ![Feature usage bars](ref_image/Screenshot%202026-02-06%20142222.png)
-   ![Anomaly table and z-scores](ref_image/Screenshot%202026-02-06%20142244.png)
-   ![Z-score distribution](ref_image/Screenshot%202026-02-06%20142302.png)
-   ![Z-score radar](ref_image/Screenshot%202026-02-06%20142316.png)
+   ![Feature usage bars](ref_image/feature-usage-bars.png)
+   ![Anomaly table and z-scores](ref_image/anomaly-table.png)
+   ![Z-score distribution](ref_image/zscore-distribution.png)
+   ![Z-score radar](ref_image/zscore-radar.png)
 
 - Additional layouts
 
-   ![Anomaly scatter](ref_image/Screenshot%202026-02-06%20142330.png)
-   ![Metrics comparison](ref_image/Screenshot%202026-02-06%20142349.png)
-   ![Sidebar navigation](ref_image/Screenshot%202026-02-06%20142433.png)
+   ![Anomaly scatter](ref_image/anomaly-scatter.png)
+   ![Metrics comparison](ref_image/metrics-comparison.png)
+   ![Sidebar navigation](ref_image/sidebar-nav.png)
 
