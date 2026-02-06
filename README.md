@@ -408,9 +408,7 @@ bajaj_assignment/
 │           └── useAnalytics.js       # useCallback wrappers for all analytics + AI calls
 │
 ├── README.md                         # ← this file
-├── summary.md                        # Initial planning document
-├── assignent_gen_ai_basic.md         # Assignment brief (submission requirements)
-└── # Enterprise Usage Monitoring…    # Assignment brief (full specification)
+└── assignent_gen_ai_basic.md         # Assignment brief (submission requirements)
 ```
 
 ## Appendix B — Quick Start
