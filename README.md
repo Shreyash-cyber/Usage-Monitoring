@@ -12,7 +12,8 @@
  │                 └─► analyticsService.getFeatureUsage()               │
  │                                                                      │
  │  AIInsights.jsx ─┬─► aiService.getInsights()                        │
- │                  └─► aiService.getAnomalies()                        │
+ │                  ├─► aiService.getAnomalies()                       │
+ │                  └─► aiService.getChartData()                       │
  │                                                                      │
  │  Users.jsx / Features.jsx  (placeholder — future wire-up)           │
  │                                                                      │
@@ -65,22 +66,23 @@
 1. **Startup** — `main.py` creates a `FastAPI()` instance, adds `CORSMiddleware` with `allow_origins=["*"]`, registers four `APIRouter` objects (`auth_routes.router`, `usage_routes.router`, `analytics_routes.router`, `ai_routes.router`), and calls `init_db()` from `session.py` which runs `SQLModel.metadata.create_all(engine)` to bootstrap all five tables.
 
 2. **Authentication flow** — `auth_routes.py` exposes three endpoints.  
-   - `POST /auth/register` calls `auth_service.register_user()` which hashes the password with `hashlib.sha256(password + "enterprise_pepper")`, creates a `User` row linked to the given `organization_id`, and returns a `UserResponse`.  
-   - `POST /auth/login` accepts `OAuth2PasswordRequestForm`, calls `auth_service.authenticate_user()` to verify the hash, then calls `jwt_utils.create_access_token()` which builds a JWT with `sub` (user id), `email`, `org_id`, `role`, and an `exp` of 1 440 minutes (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES` in `.env`). The token is signed with HS256 using `SECRET_KEY`.  
-   - `GET /auth/me` calls `auth_service.get_current_user()` — an `OAuth2PasswordBearer` dependency that reads the `Authorization` header, decodes the JWT with `jwt_utils.verify_token()`, and fetches the `User` row by id.
+   - `POST /auth/register` calls `auth_service.create_user()` which hashes the password with `hashlib.sha256(password + "usage-monitor-pepper")`, validates the organization, and returns `UserRead`.  
+   - `POST /auth/login` accepts `OAuth2PasswordRequestForm`, calls `auth_service.authenticate()` to verify the hash, and issues a JWT via `jwt_utils.create_access_token(subject=user.id, org_id, role)`.  
+   - `GET /auth/me` calls `auth_service.get_current_user()` — an `OAuth2PasswordBearer` dependency that decodes the token with `jwt_utils.decode_token()` and returns `UserRead`.
 
 3. **Event tracking** — `POST /events/track` receives a `UsageEventCreate` body (`org_id`, `feature_id`, `event_type`, `session_duration`, `metadata`). `usage_service.track_event()` first verifies the feature belongs to the org (`select(Feature).where(Feature.id == … , Feature.organization_id == …)`), then creates a `UsageLog` row with the authenticated user's id and commits it.
 
-4. **Aggregation** — `POST /analytics/aggregate/run` (admin-only: route checks `current_user.role == "admin"`) calls `aggregation_service.run_aggregation(date)`. It queries all `UsageLog` rows for that date, groups by `(organization_id, feature_id)`, computes `daily_active_users` (distinct user count), `event_count`, and `avg_session_duration`, then upserts into the `AggregatedUsage` table (updates if a row for the same org+feature+date already exists).
+4. **Aggregation** — `POST /analytics/aggregate/run` checks `current_user.role`; non-admins get a friendly message, admins trigger `aggregation_service.aggregate_daily(date)` which rolls up `UsageLog` rows by `(organization_id, feature_id)` and upserts `AggregatedUsage`, returning the count aggregated.
 
 5. **Analytics queries** — `analytics_service.py` provides three functions:  
    - `get_usage_summary(org_id)` → `SELECT count(*) FROM usage_log WHERE org_id = ?`, `SELECT count(DISTINCT user_id)`, `SELECT count(DISTINCT feature_id)`.  
    - `get_feature_usage(org_id)` → reads `AggregatedUsage` rows, groups by `feature_id`, sums `event_count`, `daily_active_users`, averages `avg_session_duration`.  
    - `get_user_activity(org_id, days)` → reads raw `UsageLog` for last N days, groups by `user_id`, counts events and averages session duration.
 
-6. **AI engine** — `ai_service.py` implements two capabilities:  
-   - **Anomaly detection** (`detect_anomalies(org_id)`) — loads all `AggregatedUsage` rows for the org, builds a **Dask DataFrame** with columns `[feature_id, event_count, daily_active_users, avg_session_duration]`. Computes column-wise z-scores `(value − mean) / std`, then the L2-norm (Euclidean distance) of the z-score vector per row to get a single `anomaly_score`. Rows with scores ≥ the **90th percentile** (computed via `dd["anomaly_score"].quantile(0.9).compute()`) are flagged. Returns a list of `AnomalyResult(feature_id, score, details)`.  
-   - **Insight generation** (`generate_insights(org_id)`) — identifies the top-3 features by total event count, builds a structured prompt like *"Analyze this enterprise usage data for org {id}: …"*, and sends it to **Google Gemini 1.5 Flash** via `google.generativeai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)`. If no `GEMINI_API_KEY` is configured, the function falls back to heuristic bullet-point insights computed from the same aggregated data.
+6. **AI engine** — `ai_service.py` implements three capabilities with in-memory caching (TTL 120s):  
+   - **Anomaly detection** (`detect_anomalies(org_id)`) — loads aggregated rows, computes per-feature z-scores over `[event_count, avg_session_duration, daily_active_users]`, derives an L2 norm, flags anything ≥ 90th percentile, and returns `AnomalyResponse` with feature names + details.  
+   - **Insight generation** (`generate_insights(org_id)`) — takes top-3 features by events, builds a prompt, and calls **Gemini 2.5 Flash** when `GEMINI_API_KEY` is present; otherwise emits heuristic bullets.  
+   - **Chart data** (`get_chart_data(org_id)`) — returns z-score breakdowns, histogram buckets, raw metrics, and the anomaly threshold for the charts.
 
 7. **Frontend rendering** — the React SPA at `frontend/src/App.jsx` wraps all routes in `<AuthProvider>` (from `useAuth.jsx`) and `<BrowserRouter>`. A `<RequireAuth>` component checks `useAuth().user` and redirects to `/login` if null. Protected routes render inside `<AdminLayout>` (sidebar + topbar + content outlet). `apiClient.js` attaches the JWT from `localStorage` on every request and clears it + redirects to `/login` on any 401 response.
 
@@ -98,15 +100,15 @@ All routes are registered in `main.py` via `app.include_router(...)`. Each route
 
 | Method | Endpoint           | Auth?  | Request Body / Params                                    | Response                        | Implementation                                                  |
 |--------|--------------------|--------|-----------------------------------------------------------|---------------------------------|-----------------------------------------------------------------|
-| POST   | `/auth/register`   | No     | `RegisterRequest` (email, password, org_id, role)        | `UserResponse`                  | `auth_service.register_user()` → hashes pw, inserts `User`     |
-| POST   | `/auth/login`      | No     | `OAuth2PasswordRequestForm` (username=email, password)   | `TokenResponse` (access_token)  | `auth_service.authenticate_user()` → `jwt_utils.create_access_token()` |
-| GET    | `/auth/me`         | Bearer | —                                                         | `UserResponse`                  | `auth_service.get_current_user()` → decodes JWT, fetches user  |
+| POST   | `/auth/register`   | No     | `UserCreate` (email, password, org_id, role)             | `UserRead`                      | `auth_service.create_user()` → SHA-256 + pepper, org check     |
+| POST   | `/auth/login`      | No     | `OAuth2PasswordRequestForm` (username=email, password)   | `Token` (access_token)          | `auth_service.authenticate()` → `jwt_utils.create_access_token()` |
+| GET    | `/auth/me`         | Bearer | —                                                         | `UserRead`                      | `auth_service.get_current_user()` → decodes JWT, fetches user  |
 
 ### Event Tracking  (`backend/app/routes/usage_routes.py`)
 
 | Method | Endpoint           | Auth?  | Request Body                                               | Response                        | Implementation                                                 |
 |--------|--------------------|--------|------------------------------------------------------------|---------------------------------|----------------------------------------------------------------|
-| POST   | `/events/track`    | Bearer | `UsageEventCreate` (org_id, feature_id, event_type, session_duration, metadata) | `UsageEventResponse`            | `usage_service.track_event()` → validates feature→org, inserts `UsageLog` |
+| POST   | `/events/track`    | Bearer | `UsageEventCreate` (org_id, feature_id, event_type, session_duration, metadata) | `UsageEventRead` (id, timestamp) | `usage_service.track_event()` → validates feature→org, inserts `UsageLog` |
 
 > Non-admin users are blocked from posting events to an org other than their own (checked in route handler).
 
@@ -114,17 +116,18 @@ All routes are registered in `main.py` via `app.include_router(...)`. Each route
 
 | Method | Endpoint                      | Auth?  | Params          | Response                   | Implementation                                         |
 |--------|-------------------------------|--------|-----------------|----------------------------|--------------------------------------------------------|
-| GET    | `/analytics/usage-summary`    | Bearer | —               | `UsageSummary`             | `analytics_service.get_usage_summary(user.org_id)`     |
-| GET    | `/analytics/feature-usage`    | Bearer | —               | `list[FeatureUsage]`       | `analytics_service.get_feature_usage(user.org_id)`     |
-| GET    | `/analytics/user-activity`    | Bearer | `?days=30`      | `list[UserActivity]`       | `analytics_service.get_user_activity(org_id, days)`    |
-| POST   | `/analytics/aggregate/run`    | Admin  | `?date=YYYY-MM-DD` | `{"status": "completed"}` | `aggregation_service.run_aggregation(date)` — admin only |
+| GET    | `/analytics/usage-summary`    | Bearer | —               | `UsageSummary`             | `analytics_service.get_usage_summary(session, org_id)` |
+| GET    | `/analytics/feature-usage`    | Bearer | —               | `list[FeatureUsage]`       | `analytics_service.get_feature_usage(session, org_id)` |
+| GET    | `/analytics/user-activity`    | Bearer | `?days=30`      | `list[UserActivity]`       | `analytics_service.get_user_activity(session, org_id, days)` |
+| POST   | `/analytics/aggregate/run`    | Admin  | `?date=YYYY-MM-DD` | `{aggregated: <count>}`    | `aggregation_service.aggregate_daily(date)`; non-admins get a message |
 
 ### AI  (`backend/app/routes/ai_routes.py`)
 
 | Method | Endpoint              | Auth?  | Params | Response                 | Implementation                                          |
 |--------|-----------------------|--------|--------|--------------------------|---------------------------------------------------------|
-| GET    | `/ai/anomalies`       | Bearer | —      | `list[AnomalyResult]`   | `ai_service.detect_anomalies(user.org_id)` — Dask z-score |
-| GET    | `/ai/usage-insights`  | Bearer | —      | `InsightResponse`        | `ai_service.generate_insights(user.org_id)` — Gemini LLM |
+| GET    | `/ai/anomalies`       | Bearer | —      | `list[AnomalyResponse]` | `ai_service.detect_anomalies(org_id)` — Dask z-score + 90th pct threshold |
+| GET    | `/ai/usage-insights`  | Bearer | —      | `InsightResponse`        | `ai_service.generate_insights(org_id)` — Gemini 2.5 Flash fallback heuristics |
+| GET    | `/ai/chart-data`      | Bearer | —      | `ChartDataResponse`      | `ai_service.get_chart_data(org_id)` — z-scores, histogram, raw metrics |
 
 ### Auth Mechanism (code detail)
 
@@ -226,10 +229,10 @@ Feature       ──1:N──► UsageLog
 
 | # | Assumption | Where It Manifests in Code |
 |---|-----------|---------------------------|
-| 1 | **Daily aggregation cadence is sufficient** — near-real-time streaming is out of scope. | `aggregation_service.run_aggregation(date)` processes one calendar day at a time; there is no Celery beat or cron trigger. |
+| 1 | **Daily aggregation cadence is sufficient** — near-real-time streaming is out of scope. | `aggregation_service.aggregate_daily(date)` processes one calendar day at a time; there is no Celery beat or cron trigger. |
 | 2 | **Single-region deployment** — no geo-distributed read replicas. | `session.py` creates a single `create_engine()` pointed at one `DATABASE_URL`. |
 | 3 | **Each usage event is a meaningful feature interaction**, not a heartbeat or page view. | `usage_service.track_event()` inserts exactly one `UsageLog` per call; no batching or deduplication. |
-| 4 | **Admins can act across all tenants**; regular users are scoped to their own org. | `usage_routes.py` checks `current_user.role != "admin" and current_user.organization_id != body.organization_id` before allowing event tracking. `analytics/aggregate/run` is gated by `role == "admin"`. |
+| 4 | **Admins can act across all tenants**; regular users are scoped to their own org. | `usage_routes.py` checks `current_user.role != "admin" and current_user.organization_id != body.organization_id` before allowing event tracking. `analytics/aggregate/run` is intended for admins (non-admins receive a message). |
 | 5 | **SQLite is acceptable for local dev**; schema is Postgres-compatible. | `session.py` conditionally adds `connect_args={"check_same_thread": False}` only when the URL starts with `sqlite`. All models use standard SQL types. |
 | 6 | **Gemini API may be unavailable** (no key, quota exceeded). | `ai_service.generate_insights()` checks `if not settings.GEMINI_API_KEY` and falls back to heuristic bullet-point insights built from top-3 features. |
 | 7 | **Session durations in seed data are synthesised from movie ratings**. | `seed_data.py` computes `rating × 60 + random(-15, 30)` clamped to ≥ 1.0 second. |
@@ -297,7 +300,7 @@ python -m app.utils.seed_data --orgs 3 --split train --limit 2000
 1. **Seed** → `Organization`, `User`, `Feature`, `UsageLog` rows are committed to SQLite.
 2. **Login** → `POST /auth/login` with `user1@org1.hf` / `password` returns a JWT.
 3. **Dashboard** → `GET /analytics/usage-summary` counts the seeded rows; `GET /analytics/feature-usage` reads `AggregatedUsage` (populated after running aggregation).
-4. **Aggregation** → `POST /analytics/aggregate/run?date=YYYY-MM-DD` processes the seeded `UsageLog` rows into daily rollups.
+4. **Aggregation** → `POST /analytics/aggregate/run?date=YYYY-MM-DD` runs `aggregate_daily` to roll up seeded `UsageLog` rows and returns the number aggregated.
 5. **AI** → `GET /ai/anomalies` builds a Dask DataFrame from `AggregatedUsage`, computes z-scores, and returns rows above the 90th percentile — the tripled-duration events surface here.
 6. **AI** → `GET /ai/usage-insights` sends the top-3 feature stats to Gemini and returns a narrative summary.
 
@@ -343,7 +346,7 @@ bajaj_assignment/
 │       ├── services/
 │       │   ├── auth_service.py       # hash_password, register, authenticate, get_current_user
 │       │   ├── usage_service.py      # track_event (validates feature→org)
-│       │   ├── aggregation_service.py# run_aggregation (daily bucket → upsert)
+│       │   ├── aggregation_service.py# aggregate_daily (daily bucket → upsert)
 │       │   ├── analytics_service.py  # get_usage_summary, get_feature_usage, get_user_activity
 │       │   └── ai_service.py         # detect_anomalies (Dask z-score), generate_insights (Gemini)
 │       ├── routes/
