@@ -412,7 +412,7 @@ npm run dev                                       # http://localhost:5173
 Quick visual reference of the current UI flows (images live under `ref_image/`).
 
 - Login view
-
+   ![Sidebar navigation](ref_image/sidebar-nav.png)
    ![Login](ref_image/login.png)
 
 - Dashboard cards and charts
@@ -431,5 +431,5 @@ Quick visual reference of the current UI flows (images live under `ref_image/`).
 
    ![Anomaly scatter](ref_image/anomaly-scatter.png)
    ![Metrics comparison](ref_image/metrics-comparison.png)
-   ![Sidebar navigation](ref_image/sidebar-nav.png)
+   
 
